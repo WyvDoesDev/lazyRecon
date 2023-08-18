@@ -2,7 +2,10 @@ module recon
 
 go 1.21.0
 
-require github.com/projectdiscovery/subfinder/v2 v2.6.2
+require (
+	github.com/projectdiscovery/subfinder/v2 v2.6.2
+	github.com/projectdiscovery/wappalyzergo v0.0.108
+)
 
 require (
 	aead.dev/minisign v0.2.0 // indirect
