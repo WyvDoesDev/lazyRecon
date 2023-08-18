@@ -15,8 +15,10 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/projectdiscovery/subfinder/v2/pkg/runner"
+	wappalyzer "github.com/projectdiscovery/wappalyzergo"
 )
 
 // ^\*\. to match .* for wildcards
@@ -98,23 +100,33 @@ func main() {
 		for fileScanner.Scan() {
 			text := fileScanner.Text()
 			fmt.Println(text)
-			_, err := http.Get(fmt.Sprintf("http://%s", text))
+			resp, err := http.DefaultClient.Get(fmt.Sprintf("http://%s", text))
 			if err != nil {
-				log.Print("not alive, skipping")
+				if strings.Contains(err.Error(), "no such host") { //todo fix error for certs
+					log.Print(err)
+					log.Print("not alive, skipping")
+				}
 			} else {
+				data, err := io.ReadAll(resp.Body) // Ignoring error for example //this breaks
+				if err != nil {
+					log.Print(err)
+				}
+
+				wappalyzerClient, err := wappalyzer.New()
+				fingerprints := wappalyzerClient.Fingerprint(resp.Header, data)
+				fmt.Printf("%v\n", fingerprints)
+
 				f3, err := os.OpenFile("alive.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 				if err != nil {
-					log.Fatal(err)
+					log.Print(err)
 				}
 				defer f3.Close()
 				_, err4 := f3.WriteString(text + "\n")
 				if err4 != nil {
-					log.Fatal(err4)
+					log.Print(err4)
 				}
 			}
 		}
-
 		readFile.Close()
 	}
-
 }
