@@ -22,10 +22,14 @@ import (
 )
 
 // ^\*\. to match .* for wildcards
-func main() {
-	if err := os.Truncate("alive.txt", 0); err != nil {
-		log.Printf("Failed to truncate: %v", err)
+func CheckError(e error, message string) {
+	if e != nil {
+		log.Print(message, e)
 	}
+}
+func main() {
+	err := os.Truncate("alive.txt", 0)
+	CheckError(err, "Can't Truncate alive.txt; likely does not exist yet")
 	// fmt.Println("arglen", len(os.Args))
 	if len(os.Args) == 1 {
 		fmt.Println("Please supply a file")
@@ -34,19 +38,12 @@ func main() {
 		content, err := os.ReadFile(os.Args[1])
 		r, _ := regexp.Compile(`^\*\.`)
 		fmt.Println(string(content))
-		if err != nil {
-			log.Print(err)
-			fmt.Println("Please supply a file that exists")
-		}
+		CheckError(err, "file does not exist")
 		f, err := os.Create("parsed.txt")
-		if err != nil {
-			log.Fatal(err)
-		}
+		CheckError(err, "parsing problem")
 		defer f.Close()
-		_, err2 := f.WriteString(r.ReplaceAllString(string(content), ""))
-		if err2 != nil {
-			log.Fatal(err2)
-		}
+		_, err = f.WriteString(r.ReplaceAllString(string(content), ""))
+		CheckError(err, "problem with regex")
 
 		subfinderOpts := &runner.Options{
 			Threads:            1,  // Thread controls the number of threads to use for active enumerations
@@ -59,40 +56,28 @@ func main() {
 		log.SetFlags(0)
 
 		subfinder, err := runner.NewRunner(subfinderOpts)
-		if err != nil {
-			log.Fatalf("failed to create subfinder runner: %v", err)
-		}
+		CheckError(err, "Failed to create subfinder runner")
 
 		output := &bytes.Buffer{}
 
 		// To run subdomain enumeration on a list of domains from file/reader
 		file, err := os.Open("parsed.txt")
-		if err != nil {
-			log.Fatalf("failed to open domains file: %v", err)
-		}
+		CheckError(err, "Can't open domain file")
 		defer file.Close()
-		if err = subfinder.EnumerateMultipleDomainsWithCtx(context.Background(), file, []io.Writer{output}); err != nil {
-			log.Fatalf("failed to enumerate subdomains from file: %v", err)
-		}
+		err = subfinder.EnumerateMultipleDomainsWithCtx(context.Background(), file, []io.Writer{output})
+		CheckError(err, "Failed to Enumerate Subdomains from file")
 
 		// print the output
 		sd := output.String()
 		log.Println(sd)
 		f2, err := os.Create("subdomains.txt")
-		if err != nil {
-			log.Fatal(err)
-		}
+		CheckError(err, "Can't create subdomains file")
 		defer f2.Close()
-		_, err3 := f2.WriteString(sd)
-		if err3 != nil {
-			log.Fatal(err3)
-		}
+		_, err = f2.WriteString(sd)
+		CheckError(err, "failed to write to subdomain file")
 
 		readFile, err := os.Open("subdomains.txt")
-
-		if err != nil {
-			fmt.Println(err)
-		}
+		CheckError(err, "failed to read subdomain file")
 		fileScanner := bufio.NewScanner(readFile)
 
 		fileScanner.Split(bufio.ScanLines)
@@ -108,23 +93,17 @@ func main() {
 				}
 			} else {
 				data, err := io.ReadAll(resp.Body) // Ignoring error for example //this breaks
-				if err != nil {
-					log.Print(err)
-				}
+				CheckError(err, "failede to read body")
 
 				wappalyzerClient, err := wappalyzer.New()
 				fingerprints := wappalyzerClient.Fingerprint(resp.Header, data)
 				fmt.Printf("%v\n", fingerprints)
 
 				f3, err := os.OpenFile("alive.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-				if err != nil {
-					log.Print(err)
-				}
+				CheckError(err, "failed to create alive.txt")
 				defer f3.Close()
-				_, err4 := f3.WriteString(text + "\n")
-				if err4 != nil {
-					log.Print(err4)
-				}
+				_, err = f3.WriteString(text + "\n")
+				CheckError(err, "failed to write to alive.txt")
 			}
 		}
 		readFile.Close()
