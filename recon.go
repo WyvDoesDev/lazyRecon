@@ -52,6 +52,7 @@ func CheckError(e error, message string) {
 func fullScreenshot(urlstr string, quality int, res *[]byte) chromedp.Tasks {
 	return chromedp.Tasks{
 		chromedp.Navigate(urlstr),
+		chromedp.Sleep(4000 * time.Millisecond),
 		chromedp.FullScreenshot(res, quality),
 	}
 }
