@@ -16,8 +16,11 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+	tld "github.com/jpillora/go-tld"
 	"github.com/projectdiscovery/subfinder/v2/pkg/runner"
 	wappalyzer "github.com/projectdiscovery/wappalyzergo"
 )
@@ -36,6 +39,10 @@ func addInfo(url string, tech string) *info {
 	return &p
 }
 
+var netClient = &http.Client{
+	Timeout: time.Second * 3,
+}
+
 // ^\*\. to match .* for wildcards
 func CheckError(e error, message string) {
 	if e != nil {
@@ -49,11 +56,12 @@ func fullScreenshot(urlstr string, quality int, res *[]byte) chromedp.Tasks {
 	}
 }
 func main() {
-	ctx, cancel := chromedp.NewContext(
-		context.Background(),
-		// chromedp.WithDebugf(log.Printf),
-	)
-	defer cancel()
+	os.Mkdir("screenshots", 0o644)
+	// ctx, cancel := chromedp.NewContext(
+	// 	context.Background(),
+	// 	// chromedp.WithDebugf(log.Printf),
+	// )
+	// defer cancel()
 	thing := 0
 	log.SetFlags(0)
 	// fmt.Println("arglen", len(os.Args))
@@ -74,12 +82,19 @@ func main() {
 	CheckError(err, "problem with regex")
 
 	subfinderOpts := &runner.Options{
-		Threads:            1,  // Thread controls the number of threads to use for active enumerations
-		Timeout:            20, // Timeout is the seconds to wait for sources to respond
+		Threads:            2,  // Thread controls the number of threads to use for active enumerations
+		Timeout:            3,  // Timeout is the seconds to wait for sources to respond
 		MaxEnumerationTime: 10, // MaxEnumerationTime is the maximum amount of time in mins to wait for enumeration
 		// ProviderConfig: "your_provider_config.yaml", need to give options to create custom
 	}
-
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("ignore-certificate-errors", "1"),
+		chromedp.Flag("headless", "1"),
+	)
+	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	defer cancel()
+	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
+	defer cancel()
 	// disable timestamps in logs / configure logger
 
 	subfinder, err := runner.NewRunner(subfinderOpts)
@@ -112,8 +127,9 @@ func main() {
 	for fileScanner.Scan() {
 		text := fileScanner.Text()
 		fmt.Println(text)
-		resp, err := http.DefaultClient.Get(fmt.Sprintf("http://%s", text))
+		resp, err := netClient.Get(fmt.Sprintf("http://%s", text))
 		if err != nil {
+			log.Print("not alive, skipping")
 			if strings.Contains(err.Error(), "no such host") { //todo fix error for certs
 				log.Print(err)
 				log.Print("not alive, skipping")
@@ -122,7 +138,7 @@ func main() {
 			data, err := io.ReadAll(resp.Body) // Ignoring error for example //this breaks
 			CheckError(err, "failed to read body")
 
-			wappalyzerClient, err := wappalyzer.New()
+			wappalyzerClient, _ := wappalyzer.New()
 			fingerprints := wappalyzerClient.Fingerprint(resp.Header, data)
 			for key := range fingerprints {
 
@@ -131,13 +147,33 @@ func main() {
 				fmt.Printf(key + " ")
 				thing++
 			}
-			if err := chromedp.Run(ctx, fullScreenshot(fmt.Sprintf("http://%s", text), 90, &buf)); err != nil {
+			// chromedp.Run(ctx,
+			// page.HandleJavaScriptDialog(true))
+
+			chromedp.ListenTarget(ctx, func(ev interface{}) {
+				if ev, ok := ev.(*page.EventJavascriptDialogOpening); ok {
+					fmt.Println("closing alert:", ev.Message)
+					go func() {
+						chromedp.Run(ctx,
+							page.HandleJavaScriptDialog(true),
+						)
+					}()
+				}
+			})
+			chromedp.Run(ctx, fullScreenshot(fmt.Sprintf("http://%s", text), 90, &buf))
+
+			// err != nil{}
+			new := strings.ReplaceAll(text, "www.", "")
+			fmt.Println(new)
+			parse, _ := tld.Parse("https://" + text)
+			os.Mkdir("screenshots/"+parse.Domain, 0o644)
+			fmt.Println(string(parse.Domain))
+			// os.Mkdir(fmt.Sprintf("screenshots/%s", strings.Split(text, ".")[1]), 0o644)
+			if err := os.WriteFile(
+				fmt.Sprintf("screenshots/%s/", parse.Domain)+strings.Join(strings.Split(new, "."), "_")+".png", buf, 0o644); err != nil {
 				log.Fatal(err)
 			}
-			os.Mkdir("screenshots", 0o644)
-			if err := os.WriteFile("screenshots/"+strings.Join(strings.Split(text, "."), "_")+".png", buf, 0o644); err != nil {
-				log.Fatal(err)
-			}
+
 			fmt.Printf("\n")
 			f3, err := os.OpenFile("alive.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			CheckError(err, "failed to create alive.txt")
