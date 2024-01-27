@@ -4,7 +4,9 @@ package main
 // https://github.com/projectdiscovery/wappalyzergo
 // https://github.com/slotix/pageres-go-wrapper
 // https://github.com/chromedp/examples
-
+// https://github.com/projectdiscovery/subfinder/blob/dev/v2/pkg/runner/runner.go
+// scrape from https://bgp.he.net/ -> run prips -> run hakip2host
+// possibly write a bbot golang wrapper and use anew
 import (
 	"bufio"
 	"bytes"
@@ -15,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,9 +26,15 @@ import (
 	tld "github.com/jpillora/go-tld"
 	"github.com/projectdiscovery/subfinder/v2/pkg/runner"
 	wappalyzer "github.com/projectdiscovery/wappalyzergo"
+	"golang.org/x/time/rate"
 )
 
-var tech string
+// lazy as fuck implementation of http ratelimit, might just do my own http client at this point
+// https://gist.github.com/MelchiSalins/27c11566184116ec1629a0726e0f9af5
+var rl string
+var rlnum int
+
+// var tech string
 var stackarr []string
 var buf []byte
 
@@ -39,8 +48,31 @@ func addInfo(url string, tech string) *info {
 	return &p
 }
 
+// ThrottledTransport Rate Limited HTTP Client
+type ThrottledTransport struct {
+	roundTripperWrap http.RoundTripper
+	ratelimiter      *rate.Limiter
+}
+
+func (c *ThrottledTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	err := c.ratelimiter.Wait(r.Context()) // This is a blocking call. Honors the rate limit
+	if err != nil {
+		return nil, err
+	}
+	return c.roundTripperWrap.RoundTrip(r)
+}
+
+func NewThrottledTransport(limitPeriod time.Duration, requestCount int, transportWrap http.RoundTripper) http.RoundTripper {
+	return &ThrottledTransport{
+		roundTripperWrap: transportWrap,
+		ratelimiter:      rate.NewLimiter(rate.Every(limitPeriod), requestCount),
+	}
+}
+
+var rltrans = NewThrottledTransport(time.Duration(rlnum)*time.Second, 1, http.DefaultTransport)
+
 var netClient = &http.Client{
-	Timeout: time.Second * 3,
+	Transport: rltrans,
 }
 
 // ^\*\. to match .* for wildcards
@@ -50,10 +82,18 @@ func CheckError(e error, message string) {
 	}
 }
 func fullScreenshot(urlstr string, quality int, res *[]byte) chromedp.Tasks {
-	return chromedp.Tasks{
-		chromedp.Navigate(urlstr),
-		chromedp.Sleep(4000 * time.Millisecond),
-		chromedp.FullScreenshot(res, quality),
+	if len(rl) == 0 {
+		return chromedp.Tasks{
+			chromedp.Navigate(urlstr),
+			chromedp.Sleep(time.Duration(rlnum) * time.Second),
+			chromedp.FullScreenshot(res, quality),
+		}
+	} else {
+		return chromedp.Tasks{
+			chromedp.Navigate(urlstr),
+			chromedp.Sleep(4 * time.Second),
+			chromedp.FullScreenshot(res, quality),
+		}
 	}
 }
 func main() {
@@ -69,6 +109,13 @@ func main() {
 	if len(os.Args) == 1 {
 		fmt.Println("Please supply a file")
 		os.Exit(0)
+	}
+	if len(os.Args) == 3 {
+		fmt.Println("ratelimit supplied")
+		//fmt.Println(rl)
+		rl = string(os.Args[2])
+		rlnum, _ = strconv.Atoi(rl)
+		//fmt.Println(rl)
 	}
 	err := os.Truncate("alive.txt", 0)
 	CheckError(err, "Can't Truncate alive.txt; likely does not exist yet")
@@ -86,8 +133,10 @@ func main() {
 		Threads:            2,  // Thread controls the number of threads to use for active enumerations
 		Timeout:            3,  // Timeout is the seconds to wait for sources to respond
 		MaxEnumerationTime: 10, // MaxEnumerationTime is the maximum amount of time in mins to wait for enumeration
+
 		// ProviderConfig: "your_provider_config.yaml", need to give options to create custom
 	}
+
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("ignore-certificate-errors", "1"),
 		chromedp.Flag("headless", "1"),
@@ -128,6 +177,7 @@ func main() {
 	for fileScanner.Scan() {
 		text := fileScanner.Text()
 		fmt.Println(text)
+		//	fmt.Println(netClient.Transport)
 		resp, err := netClient.Get(fmt.Sprintf("http://%s", text))
 		if err != nil {
 			log.Print("not alive, skipping")
@@ -138,7 +188,6 @@ func main() {
 		} else {
 			data, err := io.ReadAll(resp.Body) // Ignoring error for example //this breaks
 			CheckError(err, "failed to read body")
-
 			wappalyzerClient, _ := wappalyzer.New()
 			fingerprints := wappalyzerClient.Fingerprint(resp.Header, data)
 			for key := range fingerprints {
@@ -148,9 +197,6 @@ func main() {
 				fmt.Printf(key + " ")
 				thing++
 			}
-			// chromedp.Run(ctx,
-			// page.HandleJavaScriptDialog(true))
-
 			chromedp.ListenTarget(ctx, func(ev interface{}) {
 				if ev, ok := ev.(*page.EventJavascriptDialogOpening); ok {
 					fmt.Println("closing alert:", ev.Message)
@@ -167,6 +213,7 @@ func main() {
 			new := strings.ReplaceAll(text, "www.", "")
 			fmt.Println(new)
 			parse, _ := tld.Parse("https://" + text)
+			//check if screenshots folder exists, if so delete
 			os.Mkdir("screenshots/"+parse.Domain, 0o644)
 			fmt.Println(string(parse.Domain))
 			// os.Mkdir(fmt.Sprintf("screenshots/%s", strings.Split(text, ".")[1]), 0o644)
@@ -185,7 +232,6 @@ func main() {
 			CheckError(err, "failed to write to alive.txt")
 			stackarr = stackarr[:0]
 			thing = 0
-
 		}
 	}
 	readFile.Close()
