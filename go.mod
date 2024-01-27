@@ -8,6 +8,7 @@ require (
 	github.com/jpillora/go-tld v1.2.1
 	github.com/projectdiscovery/subfinder/v2 v2.6.2
 	github.com/projectdiscovery/wappalyzergo v0.0.108
+	golang.org/x/time v0.4.0
 )
 
 require (
