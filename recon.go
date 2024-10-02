@@ -69,12 +69,6 @@ func NewThrottledTransport(limitPeriod time.Duration, requestCount int, transpor
 	}
 }
 
-var rltrans = NewThrottledTransport(time.Duration(rlnum)*time.Second, 1, http.DefaultTransport)
-
-var netClient = &http.Client{
-	Transport: rltrans,
-}
-
 // ^\*\. to match .* for wildcards
 func CheckError(e error, message string) {
 	if e != nil {
@@ -82,21 +76,27 @@ func CheckError(e error, message string) {
 	}
 }
 func fullScreenshot(urlstr string, quality int, res *[]byte) chromedp.Tasks {
-	if len(rl) == 0 {
+	if rlnum != 0 {
 		return chromedp.Tasks{
 			chromedp.Navigate(urlstr),
-			chromedp.Sleep(time.Duration(rlnum) * time.Second),
+			chromedp.Sleep(time.Duration(rlnum) * time.Millisecond),
 			chromedp.FullScreenshot(res, quality),
 		}
 	} else {
 		return chromedp.Tasks{
 			chromedp.Navigate(urlstr),
-			chromedp.Sleep(4 * time.Second),
+			chromedp.Sleep(1000 * time.Millisecond),
 			chromedp.FullScreenshot(res, quality),
 		}
 	}
 }
+
 func main() {
+	var rltrans = NewThrottledTransport(time.Duration(rlnum)*time.Millisecond, 1, http.DefaultTransport)
+
+	var netClient = &http.Client{
+		Transport: rltrans,
+	}
 	os.Mkdir("screenshots", 0o644)
 	// ctx, cancel := chromedp.NewContext(
 	// 	context.Background(),
@@ -188,6 +188,9 @@ func main() {
 		} else {
 			data, err := io.ReadAll(resp.Body) // Ignoring error for example //this breaks
 			CheckError(err, "failed to read body")
+			//check for aws buckets
+
+			//<Contents>\s*<Key>.*<\/Key> literally worst regex in the world but it works kinda
 			wappalyzerClient, _ := wappalyzer.New()
 			fingerprints := wappalyzerClient.Fingerprint(resp.Header, data)
 			for key := range fingerprints {
@@ -228,10 +231,11 @@ func main() {
 			defer f3.Close()
 			info := addInfo(text, strings.Join(stackarr, ", "))
 			fmt.Println(info.url, info.tech)
-			_, err = f3.WriteString(text + "\n" + strings.Join(stackarr, ", ") + "\n")
+			_, err = f3.WriteString(text + "|" + strings.Join(stackarr, ", ") + "\n")
 			CheckError(err, "failed to write to alive.txt")
 			stackarr = stackarr[:0]
 			thing = 0
+
 		}
 	}
 	readFile.Close()
